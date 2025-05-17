@@ -8,7 +8,7 @@ app = flask.Flask(__name__, template_folder='templates')
 
 # --- โหลดโมเดลและส่วนประกอบที่เกี่ยวข้อง ---
 # หมายเหตุ: ตรวจสอบให้แน่ใจว่าชื่อไฟล์ตรงกับที่บันทึกไว้จาก Notebook
-MODEL_FILENAME = 'optimized_xgboost_accident_severity_model.joblib' # หรือชื่อโมเดลที่ดีที่สุดที่เลือก
+MODEL_FILENAME = 'optimized_xgboost.joblib' # หรือชื่อโมเดลที่ดีที่สุดที่เลือก
 PREPROCESSOR_FILENAME = 'preprocessor_accident_severity.joblib'
 LABEL_ENCODER_FILENAME = 'target_label_encoder_accident_severity.joblib'
 PROCESSED_FEATURE_NAMES_FILENAME = 'processed_feature_names.joblib' # เพิ่มการโหลดไฟล์นี้
@@ -25,12 +25,6 @@ except FileNotFoundError as e:
 except Exception as e:
     print(f"An unexpected error occurred during loading: {e}")
     model, preprocessor, label_encoder, processed_feature_names = None, None, None, None
-
-
-# --- กำหนดคอลัมน์ที่คาดหวังสำหรับ Input DataFrame ก่อน Preprocessing ---
-# **สำคัญมาก:** ลำดับและชื่อคอลัมน์เหล่านี้ต้องตรงกับที่ preprocessor ถูก fit ไว้ใน Notebook
-# อ้างอิงจาก 'environmental_features_for_X' ใน Notebook ฉบับปรับปรุง V3
-# และต้องแยก numerical กับ categorical ให้ถูกต้องตามที่ preprocessor คาดหวัง
 
 numerical_cols = [
     'latitude', 'longitude', 'Holiday', 'incident_hour',
@@ -69,26 +63,25 @@ def main():
 def predict():
     if not all([model, preprocessor, label_encoder, processed_feature_names]):
         return flask.jsonify({'error': 'Model or associated files not loaded properly. Check server logs.'}), 500
-
     try:
-        # รับข้อมูลจาก form ที่ผู้ใช้กรอก
         form_data = flask.request.form.to_dict()
         print(f"Received form data: {form_data}")
         
         input_data_dict = {}
-        for col in numerical_cols:
-            try:
-                # แปลงเป็น float และใช้ 0 หากไม่มีค่าหรือแปลงไม่ได้ (อาจต้องปรับปรุงการจัดการ error)
-                input_data_dict[col] = [float(form_data.get(col, 0))] 
-            except ValueError:
-                 return flask.jsonify({'error': f"Invalid value for numerical feature {col}: {form_data.get(col)}"}), 400
+        for col in numerical_cols: # Loop สำหรับ numerical_cols
+            value_str = form_data.get(col)
+            if value_str is None or value_str == '':
+                input_data_dict[col] = [np.nan] 
+            else:
+                try:
+                    input_data_dict[col] = [float(value_str)]
+                except ValueError: # <-- except block นี้
+                    return flask.jsonify({'error': f"Invalid value for numerical feature {col}: {value_str}"}), 400 # บรรทัด 87 ★★★
         
-        for col in categorical_cols:
-            # ใช้ string ว่างเป็น default หากไม่มีค่า (preprocessor ควรจัดการ missing values)
+        # ★★★ ปัญหาอาจจะอยู่ที่การย่อหน้าของ for loop ถัดไปนี้ ★★★
+        for col in categorical_cols: # Loop สำหรับ categorical_cols
             input_data_dict[col] = [str(form_data.get(col, ''))] 
 
-        # สร้าง DataFrame จากข้อมูลที่รับมา โดยใช้คอลัมน์ตามลำดับที่ preprocessor คาดหวัง
-        # (ลำดับของ numerical_cols + categorical_cols ต้องตรงกับตอน fit preprocessor)
         input_df = pd.DataFrame(input_data_dict, columns=numerical_cols + categorical_cols)
         
         print(f"DataFrame created for preprocessing:\n{input_df}")
@@ -124,7 +117,7 @@ def predict():
             'predicted_severity_meaning': predicted_severity_meaning
         })
 
-    except Exception as e:
+    except Exception as e: # <--- except block หลักของ predict (ควรจะอยู่ในระดับเดียวกับ try ด้านบน)
         print(f"Error during prediction: {e}")
         import traceback
         traceback.print_exc()
